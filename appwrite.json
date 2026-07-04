@@ -1,7 +1,7 @@
 {
-  "projectId": "appwrite",
-  "functionId": "",
-  "runtime": "python-3.12",
-  "entrypoint": "main.py",
-  "commands": "pip install -r requirements.txt"
+  "projectId": "app-crawler",
+  "functionId": "bfzy-crawler-ts",
+  "runtime": "node-20",
+  "entrypoint": "dist/index.js",
+  "commands": "npm install && npm run build"
 }

@@ -1,4 +1,0 @@
-requests
-urllib3
-pypinyin
-psycopg2-binary
