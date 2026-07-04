@@ -1,17 +1,24 @@
 {
-  "name": "bfzy-crawler-ts",
-  "main": "dist/index.js",
+  "name": "vod-crawler",
+  "version": "1.0.0",
+  "type": "commonjs",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "tsx src/main.ts",
+    "dev:watch": "nodemon --exec tsx src/main.ts"
   },
   "dependencies": {
-    "axios": "^1.7.7",
-    "pg": "^8.13.0",
-    "pinyin": "^3.1.0"
+    "axios": "^1.6.0",
+    "dotenv": "^16.6.1",
+    "pg": "^8.11.0",
+    "pinyin": "^3.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.6.0",
-    "@types/node": "^20.16.0",
-    "@types/pg": "^8.11.0"
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.10.0",
+    "nodemon": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
   }
 }

@@ -1,18 +1,20 @@
-import axios from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import { Pool, PoolClient } from 'pg';
 import pinyin from 'pinyin';
-
-// 环境变量
-const DB_HOST = process.env.DB_HOST;
-const DB_PORT = process.env.DB_PORT || '5432';
-const DB_NAME = process.env.DB_NAME || 'postgres';
-const DB_USER = process.env.DB_USER;
-const DB_PASS = process.env.DB_PASS;
-const TABLE_NAME = 'vod';
-const MAX_THREAD = 3;
-const API_BASE_URL = 'https://bfzyapi.com/api.php/provide/vod/';
-
+import dotenv from 'dotenv';
+dotenv.config();
+// ==================== 类型定义 ====================
 type VideoItem = Record<string, string | number | undefined>;
+
+type AppwriteContext = {
+  req: Request & { json: () => Promise<unknown> };
+  res: {
+    json: (obj: unknown) => { send: () => void };
+    text: (text: string) => { send: () => void };
+  };
+  log: (message: string) => void;
+  error: (message: string) => void;
+};
 
 const KEEP_FIELDS = [
   "vod_id", "type_id", "type_name", "type_id_1",
@@ -24,35 +26,53 @@ const KEEP_FIELDS = [
   "vod_name_letter"
 ] as const;
 
-// PG连接池
+// ==================== 环境变量 ====================
+const DB_HOST = process.env.DB_HOST;
+const DB_PORT = parseInt(process.env.DB_PORT || '5432');
+const DB_NAME = process.env.DB_NAME || 'postgres';
+const DB_USER = process.env.DB_USER;
+const DB_PASS = process.env.DB_PASS;
+const TABLE_NAME = process.env.TABLE_NAME || 'vod';
+const MAX_THREAD = parseInt(process.env.MAX_THREAD || '3');
+const API_BASE_URL = 'https://bfzyapi.com/api.php/provide/vod/';
+
+// ==================== 检查环境变量 ====================
+if (!DB_HOST || !DB_USER || !DB_PASS) {
+  console.error('❌ 请检查环境变量，缺少必要的数据库配置');
+  console.error('需要设置: DB_HOST, DB_USER, DB_PASS');
+  process.exit(1);
+}
+
+// ==================== PG 连接池 ====================
 const pool = new Pool({
   host: DB_HOST,
-  port: Number(DB_PORT),
+  port: DB_PORT,
   database: DB_NAME,
   user: DB_USER,
   password: DB_PASS,
-  connectionTimeoutMillis: 10000
+  connectionTimeoutMillis: 10000,
+  max: 5,
 });
 
-/** 获取中文名拼音首字母大写，最多50字符 */
+// ==================== 工具函数 ====================
 function getFirstLetter(text: string): string {
   if (!text) return '';
-  const res: string[] = [];
+  const result: string[] = [];
   for (const char of text) {
     if (/[\u4e00-\u9fa5]/.test(char)) {
       const py = pinyin(char, { style: pinyin.STYLE_FIRST_LETTER });
       if (py.length) {
         const letter = py[0][0].toUpperCase();
-        if (/[A-Z]/.test(letter)) res.push(letter);
+        if (/[A-Z]/.test(letter)) result.push(letter);
       }
     } else if (/[a-zA-Z]/.test(char)) {
-      res.push(char.toUpperCase());
+      result.push(char.toUpperCase());
     } else if (/\d/.test(char)) {
-      res.push(char);
+      result.push(char);
     }
-    if (res.length >= 50) break;
+    if (result.length >= 50) break;
   }
-  return res.join('').slice(0, 50);
+  return result.join('').slice(0, 50);
 }
 
 function cleanField(val?: string): string {
@@ -74,7 +94,9 @@ function cleanVideo(v: VideoItem): Record<string, string | number> {
   return item;
 }
 
-async function savePage(videoList: VideoItem[]) {
+// ==================== 数据库操作 ====================
+async function savePage(videoList: VideoItem[]): Promise<void> {
+  // ✅ 已删除 if(true) return;
   if (!videoList.length) return;
   const client: PoolClient = await pool.connect();
   try {
@@ -100,8 +122,9 @@ async function savePage(videoList: VideoItem[]) {
   }
 }
 
-// axios 重试实例
-const axiosInstance = axios.create({ timeout: 20000 });
+// ==================== HTTP 请求 ====================
+const axiosInstance: AxiosInstance = axios.create({ timeout: 20000 });
+
 axiosInstance.interceptors.response.use(
   res => res,
   async (err) => {
@@ -116,9 +139,14 @@ axiosInstance.interceptors.response.use(
   }
 );
 
+interface ApiResponse {
+  pagecount?: string | number;
+  list?: Array<{ vod_id?: number | string }>;
+}
+
 async function getTotalPage(): Promise<number> {
   try {
-    const res = await axiosInstance.get(`${API_BASE_URL}?pg=1&h=24`);
+    const res = await axiosInstance.get<ApiResponse>(`${API_BASE_URL}?pg=1&h=24`);
     return Number(res.data.pagecount) || 1;
   } catch (e) {
     console.error('获取总页数失败', (e as Error).message);
@@ -128,9 +156,9 @@ async function getTotalPage(): Promise<number> {
 
 async function getPageIds(page: number): Promise<string[]> {
   try {
-    const res = await axiosInstance.get(`${API_BASE_URL}?pg=${page}`);
+    const res = await axiosInstance.get<ApiResponse>(`${API_BASE_URL}?pg=${page}`);
     return (res.data.list || [])
-      .map((item: { vod_id?: number }) => String(item.vod_id))
+      .map((item) => String(item.vod_id))
       .filter(Boolean);
   } catch (e) {
     console.error(`第${page}页ID拉取失败`, (e as Error).message);
@@ -141,7 +169,9 @@ async function getPageIds(page: number): Promise<string[]> {
 async function getDetailByIds(ids: string[]): Promise<VideoItem[]> {
   if (!ids.length) return [];
   try {
-    const res = await axiosInstance.get(`${API_BASE_URL}?ac=detail&ids=${ids.join(',')}`);
+    const res = await axiosInstance.get<{ list?: VideoItem[] }>(
+      `${API_BASE_URL}?ac=detail&ids=${ids.join(',')}`
+    );
     return res.data.list || [];
   } catch (e) {
     console.error('批量详情拉取失败', (e as Error).message);
@@ -149,7 +179,7 @@ async function getDetailByIds(ids: string[]): Promise<VideoItem[]> {
   }
 }
 
-async function pageTask(page: number) {
+async function pageTask(page: number): Promise<void> {
   await new Promise(r => setTimeout(r, 1500));
   const ids = await getPageIds(page);
   if (!ids.length) return;
@@ -158,7 +188,7 @@ async function pageTask(page: number) {
   console.log(`📄 第 ${page} 页处理完毕`);
 }
 
-async function runCrawl() {
+async function runCrawl(): Promise<{ totalPages: number }> {
   const total = await getTotalPage();
   console.log(`🚀 开始爬虫，总页数：${total}，并发：${MAX_THREAD}`);
 
@@ -178,27 +208,46 @@ async function runCrawl() {
   return { totalPages: total };
 }
 
-// Appwrite 函数入口
-type AppwriteContext = {
-  req: unknown;
-  res: {
-    json: (obj: unknown) => unknown;
-  };
-};
+// ==================== Appwrite 函数入口 ====================
+export default async function main(context: AppwriteContext) {
+  const { res, log, error } = context;
 
-module.exports = async ({ res }: AppwriteContext) => {
   try {
+    log('🚀 爬虫任务开始执行...');
     const result = await runCrawl();
+    log(`✅ 爬虫任务完成，共处理 ${result.totalPages} 页`);
+
     return res.json({
       code: 200,
       msg: '爬虫任务执行完成',
-      data: result
+      data: result,
     });
   } catch (err) {
+    error('❌ 任务异常');
     return res.json({
       code: 500,
       msg: '任务异常',
-      error: (err as Error).message
+      error: (err as Error).message,
     });
   }
-};
+}
+
+// ==================== 本地调试入口 ====================
+// 如果在本地运行（非 Appwrite 环境），执行 main
+
+  // console.log('🚀 本地调试模式启动...');
+  // main({
+  //   req: {} as Request,
+  //   res: {
+  //     json: (obj: unknown) => {
+  //       console.log('📊 返回结果:', JSON.stringify(obj, null, 2));
+  //       return { send: () => {} };
+  //     },
+  //     text: (text: string) => {
+  //       console.log('📝 返回文本:', text);
+  //       return { send: () => {} };
+  //     }
+  //   },
+  //   log: console.log,
+  //   error: console.error
+  // }).catch(console.error);
