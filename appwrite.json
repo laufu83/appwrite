@@ -1,0 +1,7 @@
+{
+  "projectId": "appwrite",
+  "functionId": "",
+  "runtime": "python-3.12",
+  "entrypoint": "main.py",
+  "commands": "pip install -r requirements.txt"
+}
